@@ -1,6 +1,6 @@
-# {{PROJECT_NAME}} — Libraries
+# hoopstat-app — Libraries
 
-This directory contains shared libraries for **{{PROJECT_NAME}}**.
+This directory contains shared libraries for **hoopstat-app**.
 
 ## Structure
 
@@ -8,7 +8,7 @@ Each subdirectory represents a reusable library:
 
 ```text
 libs/
-├── {{LIB_NAME}}/
+├── hoopstat-shared/
 │   ├── README.md          # Library-specific documentation
 │   ├── ...                # Library source code
 │   └── tests/             # Library tests
