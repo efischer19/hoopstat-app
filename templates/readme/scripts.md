@@ -1,6 +1,6 @@
-# {{PROJECT_NAME}} — Scripts
+# hoopstat-app — Scripts
 
-This directory contains utility and automation scripts for **{{PROJECT_NAME}}**.
+This directory contains utility and automation scripts for **hoopstat-app**.
 
 ## Structure
 
