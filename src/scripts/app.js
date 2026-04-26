@@ -1,68 +1,728 @@
 /**
- * Static JS App — Main Script
- *
- * This is the JavaScript entry point for the application.
- * The default setup uses vanilla JavaScript with no build step.
- *
- * Includes a minimal dark mode toggle as an example of accessible
- * interactive patterns (keyboard navigable, ARIA attributes, screen
- * reader announcements).
+ * Hoopstat Haus - Frontend Application
+ * Data browser for basketball analytics artifacts served via CloudFront
  */
 
-"use strict";
+// Configuration
+const CONFIG = {
+  // CloudFront distribution base URL for Gold JSON artifacts.
+  // The CloudFront origin_path is "/served", so client paths omit that prefix.
+  // DEPLOY: Replace this placeholder with the actual domain from:
+  //   cd infrastructure && terraform output cloudfront_distribution
+  // or a configured vanity domain (e.g. "https://hoopstat.haus").
+  GOLD_BASE_URL: 'https://CLOUDFRONT_DOMAIN_PLACEHOLDER',
+  REQUEST_TIMEOUT_MS: 10000,
+};
 
-document.addEventListener("DOMContentLoaded", () => {
-  initThemeToggle();
-});
+// Application state
+const state = {
+  isLoading: false,
+  latestDate: null,
+  indexData: null,
+  activeTab: 'players',
+  chartInstance: null,
+  currentStat: 'points',
+  currentGames: [],
+};
+
+// Default stats available for player and team artifacts
+const PLAYER_STATS = ['points', 'rebounds', 'assists', 'steals', 'blocks', 'minutes'];
+const TEAM_STATS = ['points', 'rebounds', 'assists', 'steals', 'blocks'];
+const MAX_GAMES_DISPLAYED = 20;
+
+// DOM elements
+let elements = {};
+
+// ---------------------------------------------------------------------------
+// Fetch utility
+// ---------------------------------------------------------------------------
+
+async function fetchArtifact(path) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    CONFIG.REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(`${CONFIG.GOLD_BASE_URL}/${path}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${path}: HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('json') && !contentType.includes('octet-stream')) {
+      throw new Error(`Unexpected content type for ${path}: ${contentType}`);
+    }
+
+    return response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+function initializeApp() {
+  elements = {
+    latestBanner: document.getElementById('latest-banner'),
+    latestDate: document.getElementById('latest-date'),
+    latestSummary: document.getElementById('latest-summary'),
+    refreshBtn: document.getElementById('refresh-btn'),
+    loadingIndicator: document.getElementById('loading-indicator'),
+    selectorContainer: document.getElementById('selector-container'),
+    tabPlayers: document.getElementById('tab-players'),
+    tabTeams: document.getElementById('tab-teams'),
+    panelPlayers: document.getElementById('panel-players'),
+    panelTeams: document.getElementById('panel-teams'),
+    playerSelect: document.getElementById('player-select'),
+    teamSelect: document.getElementById('team-select'),
+    dataLoading: document.getElementById('data-loading'),
+    dataContainer: document.getElementById('data-container'),
+    dataTitle: document.getElementById('data-title'),
+    dataContent: document.getElementById('data-content'),
+    errorContainer: document.getElementById('error-container'),
+    errorMessage: document.getElementById('error-message'),
+    retryBtn: document.getElementById('retry-btn'),
+    chartSection: document.getElementById('chart-section'),
+    statSelector: document.getElementById('stat-selector'),
+    chartLoading: document.getElementById('chart-loading'),
+    noDataMessage: document.getElementById('no-data-message'),
+    trendsCanvas: document.getElementById('trends-chart'),
+  };
+
+  attachEventListeners();
+  initChartSection();
+  loadIndex();
+
+  console.log('Hoopstat Haus app initialized');
+}
+
+function attachEventListeners() {
+  elements.refreshBtn.addEventListener('click', loadIndex);
+  elements.retryBtn.addEventListener('click', loadIndex);
+
+  elements.tabPlayers.addEventListener('click', () => switchTab('players'));
+  elements.tabTeams.addEventListener('click', () => switchTab('teams'));
+
+  elements.playerSelect.addEventListener('change', handlePlayerSelect);
+  elements.teamSelect.addEventListener('change', handleTeamSelect);
+}
+
+// ---------------------------------------------------------------------------
+// Index loading
+// ---------------------------------------------------------------------------
+
+async function loadIndex() {
+  hideError();
+  hideData();
+  elements.latestBanner.style.display = 'none';
+  elements.selectorContainer.style.display = 'none';
+  elements.loadingIndicator.style.display = 'flex';
+
+  try {
+    const data = await fetchArtifact('index/latest.json');
+    state.indexData = data;
+    state.latestDate = getLatestDate(data);
+
+    displayBanner(data);
+    populateSelectors(data);
+
+    elements.selectorContainer.style.display = 'block';
+  } catch (err) {
+    showError(getErrorMessage(err));
+  } finally {
+    elements.loadingIndicator.style.display = 'none';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Banner
+// ---------------------------------------------------------------------------
+
+function displayBanner(data) {
+  const dateStr = getLatestDate(data) || 'Unknown';
+  elements.latestDate.textContent = `Latest data: ${dateStr}`;
+
+  const players = data.players || [];
+  const teams = data.teams || [];
+  const parts = [];
+  if (players.length) parts.push(`${players.length} players`);
+  if (teams.length) parts.push(`${teams.length} teams`);
+  elements.latestSummary.textContent = parts.length
+    ? parts.join(', ')
+    : '';
+
+  elements.latestBanner.style.display = 'flex';
+}
+
+// ---------------------------------------------------------------------------
+// Selectors
+// ---------------------------------------------------------------------------
+
+function populateSelectors(data) {
+  const players = data.players || [];
+  const teams = data.teams || [];
+
+  populateSelect(
+    elements.playerSelect,
+    players,
+    '-- Select a player --',
+  );
+  populateSelect(
+    elements.teamSelect,
+    teams,
+    '-- Select a team --',
+  );
+}
+
+function populateSelect(selectEl, items, placeholder) {
+  selectEl.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = placeholder;
+  selectEl.appendChild(defaultOpt);
+
+  items.forEach(item => {
+    const opt = document.createElement('option');
+    const id = getItemId(item);
+    opt.value = id;
+    opt.textContent = getItemName(item, id);
+    selectEl.appendChild(opt);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tab switching
+// ---------------------------------------------------------------------------
+
+function switchTab(tab) {
+  state.activeTab = tab;
+
+  const isPlayers = tab === 'players';
+  elements.tabPlayers.classList.toggle('active', isPlayers);
+  elements.tabTeams.classList.toggle('active', !isPlayers);
+  elements.tabPlayers.setAttribute('aria-selected', String(isPlayers));
+  elements.tabTeams.setAttribute('aria-selected', String(!isPlayers));
+  elements.panelPlayers.style.display = isPlayers ? 'block' : 'none';
+  elements.panelTeams.style.display = isPlayers ? 'none' : 'block';
+
+  hideData();
+}
+
+// ---------------------------------------------------------------------------
+// Selection handlers
+// ---------------------------------------------------------------------------
+
+async function handlePlayerSelect() {
+  const playerId = elements.playerSelect.value;
+  if (!playerId) {
+    hideData();
+    return;
+  }
+  const date = state.latestDate;
+  await loadArtifact(`player_daily/${date}/${playerId}.json`, 'Player Stats');
+}
+
+async function handleTeamSelect() {
+  const teamId = elements.teamSelect.value;
+  if (!teamId) {
+    hideData();
+    return;
+  }
+  const date = state.latestDate;
+  await loadArtifact(`team_daily/${date}/${teamId}.json`, 'Team Stats');
+}
+
+async function loadArtifact(path, title) {
+  hideError();
+  hideData();
+  elements.dataLoading.style.display = 'flex';
+
+  try {
+    const data = await fetchArtifact(path);
+    showData(data, title);
+    renderTrendsChart(data);
+  } catch (err) {
+    showError(getErrorMessage(err));
+  } finally {
+    elements.dataLoading.style.display = 'none';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Data display
+// ---------------------------------------------------------------------------
+
+function showData(data, title) {
+  elements.dataTitle.textContent = title;
+  elements.dataContent.innerHTML = formatArtifact(data);
+  elements.dataContainer.style.display = 'block';
+  elements.dataContainer.scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideData() {
+  elements.dataContainer.style.display = 'none';
+  hideChart();
+}
+
+function formatArtifact(data) {
+  if (typeof data !== 'object' || data === null) {
+    return `<p>${escapeHtml(String(data))}</p>`;
+  }
+
+  // Build stat cards for top-level scalar values and tables for nested data
+  let cardsHtml = '';
+  let tablesHtml = '';
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value === null || value === undefined) continue;
+
+    if (Array.isArray(value)) {
+      tablesHtml += renderArraySection(key, value);
+    } else if (typeof value === 'object') {
+      tablesHtml += renderObjectSection(key, value);
+    } else {
+      cardsHtml += `<div class="stat-card">
+        <span class="stat-label">${escapeHtml(formatLabel(key))}</span>
+        <span class="stat-value">${escapeHtml(String(value))}</span>
+      </div>`;
+    }
+  }
+
+  let html = '';
+  if (cardsHtml) {
+    html += `<div class="stat-cards">${cardsHtml}</div>`;
+  }
+  if (tablesHtml) {
+    html += tablesHtml;
+  }
+  return html || '<p>No data available.</p>';
+}
+
+function renderObjectSection(key, obj) {
+  let rows = '';
+  for (const [k, v] of Object.entries(obj)) {
+    rows += `<tr>
+      <td>${escapeHtml(formatLabel(k))}</td>
+      <td>${escapeHtml(String(v ?? ''))}</td>
+    </tr>`;
+  }
+  return `<div class="data-section">
+    <h3>${escapeHtml(formatLabel(key))}</h3>
+    <table class="stats-table"><tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderArraySection(key, arr) {
+  if (arr.length === 0) return '';
+  const first = arr[0];
+
+  if (typeof first !== 'object' || first === null) {
+    const items = arr.map(v => `<li>${escapeHtml(String(v))}</li>`).join('');
+    return `<div class="data-section">
+      <h3>${escapeHtml(formatLabel(key))}</h3>
+      <ul>${items}</ul>
+    </div>`;
+  }
+
+  const headers = Object.keys(first);
+  const thRow = headers.map(h => `<th>${escapeHtml(formatLabel(h))}</th>`).join('');
+  const bodyRows = arr
+    .map(row => {
+      const cells = headers
+        .map(h => `<td>${escapeHtml(String(row[h] ?? ''))}</td>`)
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+
+  return `<div class="data-section">
+    <h3>${escapeHtml(formatLabel(key))}</h3>
+    <div class="table-wrapper">
+      <table class="stats-table">
+        <thead><tr>${thRow}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Error display
+// ---------------------------------------------------------------------------
+
+function showError(message) {
+  elements.errorMessage.textContent = message;
+  elements.errorContainer.style.display = 'block';
+  elements.errorContainer.scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideError() {
+  elements.errorContainer.style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatLabel(key) {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
 
 /**
- * Initialize the dark/light theme toggle.
- *
- * Behavior:
- * - Reads the user's saved preference from localStorage.
- * - Falls back to the operating system's preferred color scheme.
- * - Updates the `data-theme` attribute on <html> and persists the choice.
- * - Updates the toggle button's label and ARIA attributes.
+ * Extract the latest date from index data.
+ * Supports both "date" and "latest_date" field names to handle
+ * potential schema variations in the Gold index artifact.
  */
-function initThemeToggle() {
-  const toggle = document.getElementById("theme-toggle");
-  if (!toggle) return;
+function getLatestDate(data) {
+  return data.date || data.latest_date || null;
+}
 
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+/**
+ * Get a display-friendly identifier from a player or team entry.
+ * The index artifact may use "id", "player_id", or "team_id" depending
+ * on the entry type, so we check all variants defensively.
+ */
+function getItemId(item) {
+  return item.id || item.player_id || item.team_id || '';
+}
 
-  // Determine initial theme: saved preference > OS preference > light
-  const saved = localStorage.getItem("theme");
-  const initial = saved || (prefersDark.matches ? "dark" : "light");
-  applyTheme(initial, toggle);
+/**
+ * Get a display-friendly name from a player or team entry.
+ * Supports "name", "full_name", and "team_name" field variants.
+ */
+function getItemName(item, fallbackId) {
+  return item.name || item.full_name || item.team_name || `ID ${fallbackId}`;
+}
 
-  // Toggle on click
-  toggle.addEventListener("click", () => {
-    const current = document.documentElement.getAttribute("data-theme");
-    const next = current === "dark" ? "light" : "dark";
-    applyTheme(next, toggle);
-    localStorage.setItem("theme", next);
-  });
+function getErrorMessage(error) {
+  if (error.name === 'AbortError') {
+    return 'Request timed out. Please try again.';
+  }
 
-  // Respond to OS preference changes (only if no saved preference)
-  prefersDark.addEventListener("change", (e) => {
-    if (!localStorage.getItem("theme")) {
-      applyTheme(e.matches ? "dark" : "light", toggle);
+  const msg = error.message || '';
+  if (msg.includes('HTTP 404')) {
+    return 'Data not found. The requested resource may not be available yet.';
+  }
+  if (msg.includes('HTTP 5')) {
+    return 'Server error. Please try again later.';
+  }
+  if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+    return 'Network error. Please check your connection and try again.';
+  }
+
+  return 'Something went wrong. Please try again.';
+}
+
+// ---------------------------------------------------------------------------
+// Trends chart
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the trends chart from an artifact's games array.
+ * Handles edge cases: missing games, empty array, missing stat fields.
+ */
+function renderTrendsChart(data) {
+  // Chart.js must be available to render trends
+  if (typeof Chart === 'undefined') return;
+
+  let games = data.games || [];
+
+  // Limit to the most recent games (last N games)
+  if (games.length > MAX_GAMES_DISPLAYED) {
+    games = games.slice(games.length - MAX_GAMES_DISPLAYED);
+  }
+
+  state.currentGames = games;
+
+  // Show/hide chart section
+  if (!elements.chartSection) return;
+
+  if (games.length === 0) {
+    elements.chartSection.style.display = 'block';
+    elements.noDataMessage.style.display = 'block';
+    elements.statSelector.style.display = 'none';
+    elements.trendsCanvas.style.display = 'none';
+    elements.chartLoading.style.display = 'none';
+    return;
+  }
+
+  elements.chartSection.style.display = 'block';
+  elements.noDataMessage.style.display = 'none';
+  elements.trendsCanvas.style.display = 'block';
+  elements.chartLoading.style.display = 'none';
+
+  // Determine available stats based on active tab
+  const availableStats = state.activeTab === 'teams' ? TEAM_STATS : PLAYER_STATS;
+  populateStatButtons(availableStats);
+
+  // Reset to default stat if current one is not available
+  if (availableStats.indexOf(state.currentStat) === -1) {
+    state.currentStat = availableStats[0] || 'points';
+  }
+
+  // Set the active button
+  setActiveStatButton(state.currentStat);
+
+  // Build chart data for the selected stat
+  const chartData = buildChartData(games, state.currentStat);
+
+  if (state.chartInstance) {
+    updateChartData(state.chartInstance, chartData.labels, chartData.datasets);
+    state.chartInstance.options.scales.y.title.text = formatLabel(state.currentStat);
+    state.chartInstance.update();
+  } else {
+    state.chartInstance = createTimeSeriesChart(
+      'trends-chart',
+      chartData.labels,
+      chartData.datasets,
+      {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: { mode: 'index', intersect: false },
+        },
+        scales: {
+          x: { title: { display: true, text: 'Game Date' } },
+          y: {
+            title: { display: true, text: formatLabel(state.currentStat) },
+            beginAtZero: true,
+          },
+        },
+      },
+    );
+  }
+}
+
+/**
+ * Build labels and datasets from games data for the given stat key.
+ * Skips games where the stat value is null or undefined (does not
+ * substitute zero for missing data).
+ */
+function buildChartData(games, statKey) {
+  const labels = [];
+  const dataPoints = [];
+
+  for (let i = 0; i < games.length; i++) {
+    const game = games[i];
+    const value = game[statKey];
+    const label = game.game_date || game.date || 'Game ' + (i + 1);
+
+    if (value !== null && value !== undefined) {
+      labels.push(label);
+      dataPoints.push(value);
     }
+  }
+
+  return {
+    labels: labels,
+    datasets: [
+      {
+        label: formatLabel(statKey),
+        data: dataPoints,
+        borderColor: '#2c5aa0',
+        backgroundColor: 'rgba(44, 90, 160, 0.1)',
+        borderWidth: 2,
+        tension: 0.3,
+        fill: true,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+      },
+    ],
+  };
+}
+
+/**
+ * Update the chart to display a different stat.
+ */
+function updateChartStat(statKey) {
+  state.currentStat = statKey;
+  setActiveStatButton(statKey);
+
+  if (!state.chartInstance || state.currentGames.length === 0) return;
+
+  const chartData = buildChartData(state.currentGames, statKey);
+  updateChartData(state.chartInstance, chartData.labels, chartData.datasets);
+  state.chartInstance.options.scales.y.title.text = formatLabel(statKey);
+  state.chartInstance.update();
+}
+
+/**
+ * Populate stat selector buttons based on available stats for the data type.
+ */
+function populateStatButtons(stats) {
+  if (!elements.statSelector) return;
+
+  elements.statSelector.innerHTML = '';
+  for (let i = 0; i < stats.length; i++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'stat-btn';
+    btn.setAttribute('data-stat', stats[i]);
+    btn.textContent = formatLabel(stats[i]);
+    btn.addEventListener('click', handleStatButtonClick);
+    elements.statSelector.appendChild(btn);
+  }
+  elements.statSelector.style.display = 'flex';
+}
+
+/**
+ * Handle click on a stat selector button.
+ */
+function handleStatButtonClick(event) {
+  const statKey = event.target.getAttribute('data-stat');
+  if (statKey) {
+    updateChartStat(statKey);
+  }
+}
+
+/**
+ * Set the active class on the correct stat button.
+ */
+function setActiveStatButton(statKey) {
+  if (!elements.statSelector) return;
+  const buttons = elements.statSelector.querySelectorAll('.stat-btn');
+  for (let i = 0; i < buttons.length; i++) {
+    buttons[i].classList.toggle('active', buttons[i].getAttribute('data-stat') === statKey);
+  }
+}
+
+/**
+ * Hide the chart section and destroy the chart instance to prevent
+ * stale data from showing when switching selections.
+ */
+function hideChart() {
+  if (elements.chartSection) {
+    elements.chartSection.style.display = 'none';
+  }
+  if (elements.noDataMessage) {
+    elements.noDataMessage.style.display = 'none';
+  }
+  if (state.chartInstance) {
+    state.chartInstance.destroy();
+    state.chartInstance = null;
+  }
+  state.currentGames = [];
+}
+
+// ---------------------------------------------------------------------------
+// Chart utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a time-series line chart on the given canvas element.
+ * Returns the Chart instance, or null if the canvas or Chart.js is unavailable.
+ * Supports updating data in-place via the returned instance.
+ */
+function createTimeSeriesChart(canvasId, labels, datasets, options) {
+  var ctx = document.getElementById(canvasId);
+  if (!ctx) {
+    console.warn("Canvas element '" + canvasId + "' not found");
+    return null;
+  }
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js library not loaded');
+    return null;
+  }
+
+  var mergedOptions = Object.assign(
+    {},
+    {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Game Date' } },
+        y: { title: { display: true, text: 'Value' }, beginAtZero: true },
+      },
+    },
+    options || {},
+  );
+
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: labels, datasets: datasets },
+    options: mergedOptions,
   });
 }
 
 /**
- * Apply a theme and update the toggle button state.
- *
- * @param {"light" | "dark"} theme - The theme to apply.
- * @param {HTMLElement} toggle - The toggle button element.
+ * Update an existing Chart instance with new labels and datasets
+ * without destroying and recreating it.
  */
-function applyTheme(theme, toggle) {
-  document.documentElement.setAttribute("data-theme", theme);
-  const isDark = theme === "dark";
-  toggle.setAttribute("aria-pressed", String(isDark));
-  toggle.querySelector(".icon").textContent = isDark ? "☀️" : "🌙";
-  toggle.querySelector(".label").textContent = isDark
-    ? "Light mode"
-    : "Dark mode";
+function updateChartData(chart, labels, datasets) {
+  if (!chart) return;
+  chart.data.labels = labels;
+  chart.data.datasets = datasets;
+  chart.update();
+}
+
+/**
+ * Progressive enhancement: show fallback message when Chart.js
+ * is unavailable (e.g. CDN failure, network blocked).
+ */
+function initChartSection() {
+  var section = document.getElementById('chart-section');
+  if (!section) return;
+
+  if (typeof Chart === 'undefined') {
+    section.style.display = 'block';
+    section.innerHTML =
+      '<p class="chart-fallback">Charts unavailable. Data is displayed below.</p>';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+  initializeApp();
+}
+
+// Export for testing (if needed)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    CONFIG,
+    PLAYER_STATS,
+    TEAM_STATS,
+    MAX_GAMES_DISPLAYED,
+    escapeHtml,
+    formatLabel,
+    formatArtifact,
+    getErrorMessage,
+    getLatestDate,
+    getItemId,
+    getItemName,
+    fetchArtifact,
+    createTimeSeriesChart,
+    updateChartData,
+    initChartSection,
+    buildChartData,
+    updateChartStat,
+    renderTrendsChart,
+    hideChart,
+  };
 }

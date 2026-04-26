@@ -1,78 +1,122 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="A static frontend application built with vanilla HTML, CSS, and JavaScript.">
-  <title>Static JS App</title>
-  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/styles.css">
-</head>
-<body>
-  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <head>
+    <meta charset="utf-8">
+    <meta name="description" content="Hoopstat Haus - Browse NBA and WNBA player and team statistics from the latest data pipeline.">
 
-  <div class="page-wrapper">
-    <header role="banner">
-      <div class="header-content">
-        <h1>Static JS App</h1>
-        <nav role="navigation" aria-label="Main navigation">
-          <ul>
-            <li><a href="#welcome-heading">Welcome</a></li>
-            <li><a href="#features-heading">Features</a></li>
-          </ul>
-        </nav>
-        <button
-          id="theme-toggle"
-          class="theme-toggle"
-          type="button"
-          aria-pressed="false"
-          aria-label="Toggle dark mode"
-        >
-          <span class="icon" aria-hidden="true">🌙</span>
-          <span class="label">Dark mode</span>
-        </button>
-      </div>
+    <title>Hoopstat Haus - Basketball Analytics</title>
+
+    <link rel="stylesheet" type="text/css" href="/assets/styles.css" media="all">
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="theme-color" content="#2c5aa0">
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
+    <script src="/scripts/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>🏀 Hoopstat Haus</h1>
+      <p>Browse NBA and WNBA player and team statistics.</p>
     </header>
 
-    <main id="main-content" role="main">
-      <section aria-labelledby="welcome-heading">
-        <h2 id="welcome-heading">Welcome</h2>
-        <p>
-          A minimal starter built with vanilla HTML, CSS, and JavaScript.
-          Edit <code>src/index.html</code>, <code>src/assets/styles.css</code>,
-          and <code>src/scripts/app.js</code> to build your application.
-        </p>
-        <p>No build step required &mdash; open this file directly in a browser.</p>
-      </section>
+    <main>
+      <div id="latest-banner" class="latest-banner" style="display: none;">
+        <div class="banner-content">
+          <span id="latest-date" class="latest-date"></span>
+          <span id="latest-summary" class="latest-summary"></span>
+        </div>
+        <button type="button" id="refresh-btn" class="refresh-btn" aria-label="Refresh data">
+          🔄 Refresh
+        </button>
+      </div>
 
-      <section aria-labelledby="features-heading">
-        <h2 id="features-heading">Features</h2>
-        <ul class="feature-list">
-          <li>
-            <h3>Semantic HTML</h3>
-            <p>Proper landmark elements and heading hierarchy for accessibility.</p>
-          </li>
-          <li>
-            <h3>Responsive CSS</h3>
-            <p>Mobile-first layout with custom properties and no framework dependencies.</p>
-          </li>
-          <li>
-            <h3>Dark Mode</h3>
-            <p>Accessible theme toggle with OS preference detection and persistence.</p>
-          </li>
-          <li>
-            <h3>Keyboard Navigable</h3>
-            <p>Skip-to-content link and visible focus indicators throughout.</p>
-          </li>
-        </ul>
-      </section>
+      <div id="loading-indicator" class="loading-indicator" style="display: none;">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading data...</p>
+      </div>
+
+      <div id="selector-container" class="selector-container" style="display: none;">
+        <div class="selector-tabs" role="tablist" aria-label="Data type">
+          <button type="button" role="tab" id="tab-players" class="tab-btn active" aria-selected="true" aria-controls="panel-players">
+            Players
+          </button>
+          <button type="button" role="tab" id="tab-teams" class="tab-btn" aria-selected="false" aria-controls="panel-teams">
+            Teams
+          </button>
+        </div>
+
+        <div id="panel-players" class="tab-panel" role="tabpanel" aria-labelledby="tab-players">
+          <label for="player-select" class="visually-hidden">Select a player</label>
+          <select id="player-select" class="data-select">
+            <option value="">-- Select a player --</option>
+          </select>
+        </div>
+
+        <div id="panel-teams" class="tab-panel" role="tabpanel" aria-labelledby="tab-teams" style="display: none;">
+          <label for="team-select" class="visually-hidden">Select a team</label>
+          <select id="team-select" class="data-select">
+            <option value="">-- Select a team --</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="data-loading" class="loading-indicator" style="display: none;">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Fetching stats...</p>
+      </div>
+
+      <div class="chart-container" id="chart-section" style="display: none;">
+        <h2>Performance Trends</h2>
+        <div id="stat-selector" class="stat-selector" style="display: none;" role="toolbar" aria-label="Select statistic to display">
+          <button type="button" class="stat-btn active" data-stat="points">Points</button>
+          <button type="button" class="stat-btn" data-stat="rebounds">Rebounds</button>
+          <button type="button" class="stat-btn" data-stat="assists">Assists</button>
+          <button type="button" class="stat-btn" data-stat="steals">Steals</button>
+          <button type="button" class="stat-btn" data-stat="blocks">Blocks</button>
+          <button type="button" class="stat-btn" data-stat="minutes">Minutes</button>
+        </div>
+        <div id="chart-loading" class="loading-indicator" style="display: none;">
+          <div class="spinner" aria-hidden="true"></div>
+          <p>Rendering chart...</p>
+        </div>
+        <div id="no-data-message" class="no-data-message" style="display: none;">
+          <p>No games data available for this selection.</p>
+        </div>
+        <canvas id="trends-chart" aria-label="Player performance trends chart" role="img">
+          <p>Chart could not be displayed. Please check your connection.</p>
+        </canvas>
+      </div>
+
+      <div id="data-container" class="data-container" style="display: none;">
+        <div class="data-header">
+          <h2 id="data-title">Stats</h2>
+        </div>
+        <div id="data-content" class="data-content">
+          <!-- Artifact data will be inserted here -->
+        </div>
+      </div>
+
+      <div id="error-container" class="error-container" style="display: none;">
+        <div class="error-content">
+          <h3>⚠️ Something went wrong</h3>
+          <p id="error-message">We're having trouble loading data right now.</p>
+          <button type="button" id="retry-btn" class="retry-btn">Try Again</button>
+        </div>
+      </div>
     </main>
 
-    <footer role="contentinfo">
-      <p>Built with the <a href="https://github.com/efischer19/static-js-app-blueprint">static-js-app-blueprint</a> template.</p>
+    <footer>
+      <div class="footer-content">
+        <p>&copy; 2024 Hoopstat Haus. Powered by AI and basketball data.</p>
+        <div class="footer-links">
+          <a href="#about">About</a>
+          <a href="#privacy">Privacy</a>
+          <a href="https://github.com/efischer19/hoopstat-app" target="_blank" rel="noopener">Source</a>
+        </div>
+      </div>
     </footer>
-  </div>
-
-  <script src="scripts/app.js"></script>
-</body>
+  </body>
 </html>
